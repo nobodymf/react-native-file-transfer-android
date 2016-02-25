@@ -5,13 +5,8 @@ import android.content.Context;
 import android.util.Log;
 import android.net.Uri;
 
-import com.facebook.react.bridge.NativeModule;
-import com.facebook.react.bridge.ReactApplicationContext;
-import com.facebook.react.bridge.ReactContext;
-import com.facebook.react.bridge.ReactContextBaseJavaModule;
-import com.facebook.react.bridge.ReactMethod;
-import com.facebook.react.bridge.Callback;
-import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.*;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 import org.json.*;
 import com.squareup.okhttp.Headers;
@@ -29,6 +24,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.FileNotFoundException;
 import java.util.HashMap;
+import java.util.Arrays;
 
 
 public class FileTransferModule extends ReactContextBaseJavaModule {
@@ -51,6 +47,14 @@ public class FileTransferModule extends ReactContextBaseJavaModule {
     return "FileTransfer";
   }
 
+    private ReadableMap getMapParam(ReadableMap map, String key, ReadableMap defaultValue) {
+        if ( map.hasKey(key)) {
+            return map.getMap(key);
+        } else {
+            return defaultValue;
+        }
+    }
+
   @ReactMethod
   public void upload(ReadableMap options, Callback complete) {
 
@@ -58,45 +62,70 @@ public class FileTransferModule extends ReactContextBaseJavaModule {
 
     try {
 
-      String uri = options.getString("uri");
-      Uri file_uri = Uri.parse(uri);
-      File file = new File(file_uri.getPath());
-
-      if(file == null) {
-        Log.d(TAG, "FILE NOT FOUND");
-        completeCallback.invoke("FILE NOT FOUND", null);
-          return;
-      }
-
       String url = options.getString("uploadUrl");
-      String mimeType = options.getString("mimeType");
-      String fileName = options.getString("fileName");
       ReadableMap headers = options.getMap("headers");
       ReadableMap data = options.getMap("data");
+      MultipartBuilder multipartBuilder = new MultipartBuilder();
+      ReadableArray files = options.getArray("files");
 
-        MediaType mediaType = MediaType.parse(mimeType);
+      multipartBuilder.type(MultipartBuilder.FORM);
 
-        RequestBody requestBody = new MultipartBuilder()
-                .type(MultipartBuilder.FORM)
-                .addPart(
-                        Headers.of("Content-Disposition",
-                                "form-data; name=\"file\"; filename=\"" + fileName + "\""
-                        ),
-                        RequestBody.create(mediaType, file)
-                )
-                .addPart(
-                        Headers.of("Content-Disposition",
-                                "form-data; name=\"filename\""
-                        ),
-                        RequestBody.create(null, fileName)
-                )
-                .build();
 
-        Request request = new Request.Builder()
+      ReadableMapKeySetIterator keys = data.keySetIterator();
+
+      while (keys.hasNextKey()) {
+          String key = keys.nextKey();
+          ReadableType type = data.getType(key);
+          String value = null;
+
+          switch (type) {
+              case String:
+                  value = data.getString(key);
+                  break;
+              case Number:
+                  value = Integer.toString(data.getInt(key));
+                  break;
+              case Boolean:
+                  value = Boolean.toString(data.getBoolean(key));
+                  break;
+              default:
+                  completeCallback.invoke(type.toString() + " type not supported.", null);
+                  break;
+         }
+
+            multipartBuilder.addFormDataPart(key, value);
+      }
+
+      for (int i = 0; i < files.size(); i++) {
+
+             ReadableMap fileDescription = files.getMap(i);
+             String mimeType = fileDescription.getString("mimeType");
+             MediaType mediaType = MediaType.parse(mimeType);
+             String fileName = fileDescription.getString("fileName");
+             String fieldName = fileDescription.getString("fieldName");
+             String uri = fileDescription.getString("uri");
+             Uri fileUri = Uri.parse(uri);
+             File file = new File(fileUri.getPath());
+
+             if(file == null) {
+               Log.d(TAG, "FILE NOT FOUND");
+               completeCallback.invoke("FILE NOT FOUND", null);
+                 return;
+             }
+
+             multipartBuilder.addFormDataPart(fieldName, fileName, RequestBody.create(mediaType, file));
+      }
+
+      multipartBuilder.build();
+
+      RequestBody requestBody = multipartBuilder.build();
+      Request request = new Request.Builder()
                 .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
                 .url(url)
                 .post(requestBody)
                 .build();
+
 
         Response response = client.newCall(request).execute();
         if (!response.isSuccessful()) {
